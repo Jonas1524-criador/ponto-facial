@@ -42,14 +42,16 @@
   </header>
   <div id="insecure-warning" style="display:none;background:#fef3c7;color:#92400e;padding:.75rem 1rem;text-align:center;font-size:.9rem">
     ⚠️ Câmera bloqueada porque o arquivo foi aberto localmente.<br>
-    Para funcionar: hospede em Netlify Drop ou similar (HTTPS) e abra o link no celular.
+    Para funcionar: hospede no GitHub Pages (HTTPS) e abra o link no celular.
   </div>
   <nav>
     <button data-s="dash" class="active">Início</button>
     <button data-s="punch">Bater Ponto</button>
-    <button data-s="reg">Cadastrar</button>
-    <button data-s="rec">Registros</button>
-    <button data-s="hol">Holerite</button>
+    <button data-s="reg" class="admin-only" style="display:none">Cadastrar</button>
+    <button data-s="rec" class="admin-only" style="display:none">Registros</button>
+    <button data-s="cartao" class="admin-only" style="display:none">Cartão de Ponto</button>
+    <button data-s="relatorio" class="admin-only" style="display:none">Relatório de Horas</button>
+    <button id="btn-admin" style="margin-left:auto">Admin</button>
   </nav>
   <main>
     <section id="s-dash" class="screen active">
@@ -91,18 +93,31 @@
     <section id="s-rec" class="screen">
       <div class="card">
         <h2>Registros</h2>
-        <button id="bexport" class="btn primary">Exportar CSV</button>
+        <select id="rec-emp"><option value="">Todos os funcionários</option></select>
+        <button id="bexport" class="btn primary">Exportar CSV (do funcionário selecionado)</button>
         <div id="reclist"></div>
       </div>
     </section>
 
-    <section id="s-hol" class="screen">
+    <section id="s-cartao" class="screen">
       <div class="card">
-        <h2>Holerite</h2>
-        <select id="hemp"></select>
-        <input id="hmonth" type="month">
-        <button id="bgenh" class="btn primary">Gerar Holerite</button>
-        <div id="hprev" class="holerite"></div>
+        <h2>Cartão de Ponto</h2>
+        <select id="cemp"></select>
+        <input id="cmonth" type="month">
+        <button id="bgenc" class="btn primary">Gerar Cartão de Ponto</button>
+        <div id="cprev" class="holerite"></div>
+      </div>
+    </section>
+
+    <section id="s-relatorio" class="screen">
+      <div class="card">
+        <h2>Relatório de Horas</h2>
+        <select id="remp"></select>
+        <div style="display:flex;gap:.5rem;margin:.5rem 0">
+          <button id="btn-week" class="btn primary" style="flex:1">Semana</button>
+          <button id="btn-month" class="btn primary" style="flex:1">Mês</button>
+        </div>
+        <div id="relatorio-content"></div>
       </div>
     </section>
   </main>
@@ -137,15 +152,40 @@
 
     document.querySelectorAll('nav button').forEach(b => {
       b.onclick = () => {
+        if (b.id === 'btn-admin') return;
         document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
         document.querySelectorAll('.screen').forEach(x => x.classList.remove('active'));
         b.classList.add('active');
         $('s-' + b.dataset.s).classList.add('active');
         if (b.dataset.s === 'dash') renderDash();
         if (b.dataset.s === 'rec') renderRec();
-        if (b.dataset.s === 'hol') loadEmpSelect();
+        if (b.dataset.s === 'cartao') loadEmpSelectCartao();
+        if (b.dataset.s === 'relatorio') loadEmpSelectRelatorio();
       };
     });
+
+    let isAdmin = false;
+    const ADMIN_PASS = 'admin123'; // altere esta senha se quiser
+
+    $('btn-admin').onclick = () => {
+      if (isAdmin) {
+        isAdmin = false;
+        document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
+        $('btn-admin').textContent = 'Admin';
+        // voltar para início
+        document.querySelector('[data-s="dash"]').click();
+        return;
+      }
+      const pass = prompt('Senha de administrador:');
+      if (pass === ADMIN_PASS) {
+        isAdmin = true;
+        document.querySelectorAll('.admin-only').forEach(el => el.style.display = '');
+        $('btn-admin').textContent = 'Sair Admin';
+        alert('Modo administrador ativado.');
+      } else if (pass !== null) {
+        alert('Senha incorreta.');
+      }
+    };
 
     async function loadModels() {
       try {
@@ -279,51 +319,167 @@
       `;
     }
     async function renderRec() {
-      const puns = (await dbAll('pun')).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
-      $('reclist').innerHTML = puns.slice(0,40).map(p=>`
+      const emps = await dbAll('emp');
+      const sel = $('rec-emp');
+      const current = sel.value;
+      sel.innerHTML = '<option value="">Todos os funcionários</option>' + emps.map(e => `<option value="${e.name}">${e.name}</option>`).join('');
+      sel.value = current;
+      const filter = sel.value;
+      let puns = (await dbAll('pun')).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+      if (filter) puns = puns.filter(p => p.employee === filter);
+      $('reclist').innerHTML = puns.slice(0,50).map(p=>`
         <div style="padding:.6rem 0;border-bottom:1px solid #eee">
           <strong>${p.employee}</strong> — ${p.type}<br>
           <small>${new Date(p.timestamp).toLocaleString('pt-BR')}</small>
           ${p.lat?` <a href="https://maps.google.com/?q=${p.lat},${p.lng}" target="_blank">Mapa</a>`:''}
         </div>`).join('') || '<p>Nenhum registro</p>';
     }
+    $('rec-emp').onchange = renderRec;
     $('bexport').onclick = async () => {
-      const puns = await dbAll('pun');
+      const filter = $('rec-emp').value;
+      let puns = await dbAll('pun');
+      if (filter) puns = puns.filter(p => p.employee === filter);
       if (!puns.length) return alert('Nada para exportar');
       const csv = 'Funcionario,Tipo,DataHora,Lat,Lng,Precisao\n' + puns.map(p=>`"${p.employee}","${p.type}","${p.timestamp}",${p.lat||''},${p.lng||''},${p.acc||''}`).join('\n');
       const a = document.createElement('a');
       a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-      a.download = 'ponto.csv'; a.click();
+      a.download = (filter || 'todos') + '-ponto.csv';
+      a.click();
     };
-    async function loadEmpSelect() {
+    async function loadEmpSelectCartao() {
       const emps = await dbAll('emp');
-      $('hemp').innerHTML = emps.map(e=>`<option value="${e.name}">${e.name}</option>`).join('');
-      $('hmonth').value = new Date().toISOString().slice(0,7);
+      $('cemp').innerHTML = emps.map(e=>`<option value="${e.name}">${e.name}</option>`).join('');
+      $('cmonth').value = new Date().toISOString().slice(0,7);
     }
-    $('bgenh').onclick = async () => {
-      const name = $('hemp').value;
-      const month = $('hmonth').value;
-      const puns = (await dbAll('pun')).filter(p=>p.employee===name && p.timestamp.startsWith(month));
-      const emp = (await dbAll('emp')).find(e=>e.name===name) || {sal:3000};
-      const h = calcHours(puns);
-      const sal = emp.sal || 3000;
-      const hn = sal / 220;
-      const ve = parseFloat(h.extra) * hn * 1.5;
-      const bruto = sal + ve;
-      const inss = bruto * 0.09;
-      const liq = bruto - inss;
-      $('hprev').innerHTML = `
-        <h3 style="text-align:center">HOLERITE - ${month}</h3>
-        <p><strong>Funcionário:</strong> ${name}</p>
-        <table>
-          <tr><td>Salário Base</td><td style="text-align:right">R$ ${sal.toFixed(2)}</td></tr>
-          <tr><td>Horas Trabalhadas</td><td style="text-align:right">${h.worked}h</td></tr>
-          <tr><td>Horas Extras (50%)</td><td style="text-align:right">${h.extra}h = R$ ${ve.toFixed(2)}</td></tr>
-          <tr><td><strong>Total Proventos</strong></td><td style="text-align:right"><strong>R$ ${bruto.toFixed(2)}</strong></td></tr>
-          <tr><td>INSS (aprox.)</td><td style="text-align:right">- R$ ${inss.toFixed(2)}</td></tr>
-          <tr><td><strong>Líquido</strong></td><td style="text-align:right"><strong>R$ ${liq.toFixed(2)}</strong></td></tr>
+    async function loadEmpSelectRelatorio() {
+      const emps = await dbAll('emp');
+      $('remp').innerHTML = emps.map(e=>`<option value="${e.name}">${e.name}</option>`).join('');
+    }
+
+    function getWeekRange() {
+      const now = new Date();
+      const day = now.getDay();
+      const diff = now.getDate() - day + (day === 0 ? -6 : 1); // segunda
+      const monday = new Date(now.setDate(diff));
+      monday.setHours(0,0,0,0);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      sunday.setHours(23,59,59,999);
+      return { start: monday, end: sunday };
+    }
+
+    function formatHours(min) {
+      const h = Math.floor(min / 60);
+      const m = min % 60;
+      return `${h}h${m.toString().padStart(2,'0')}`;
+    }
+
+    async function generateReport(type) {
+      const name = $('remp').value;
+      if (!name) return alert('Selecione um funcionário');
+      const allPuns = await dbAll('pun');
+      let filtered = allPuns.filter(p => p.employee === name);
+
+      let title = '';
+      if (type === 'week') {
+        const { start, end } = getWeekRange();
+        filtered = filtered.filter(p => {
+          const d = new Date(p.timestamp);
+          return d >= start && d <= end;
+        });
+        title = `Semana de ${start.toLocaleDateString('pt-BR')} a ${end.toLocaleDateString('pt-BR')}`;
+      } else {
+        const month = new Date().toISOString().slice(0,7);
+        filtered = filtered.filter(p => p.timestamp.startsWith(month));
+        title = `Mês ${month}`;
+      }
+
+      const hours = calcHours(filtered);
+      const byDay = {};
+      filtered.forEach(p => {
+        const day = p.timestamp.slice(0,10);
+        (byDay[day] ||= []).push(p);
+      });
+
+      let dailyRows = '';
+      Object.keys(byDay).sort().forEach(day => {
+        const dayHours = calcHours(byDay[day]);
+        dailyRows += `<tr>
+          <td>${day.split('-').reverse().join('/')}</td>
+          <td>${dayHours.worked}h</td>
+          <td>${dayHours.extra}h</td>
+        </tr>`;
+      });
+
+      $('relatorio-content').innerHTML = `
+        <div class="holerite">
+          <h3 style="text-align:center">RELATÓRIO DE HORAS</h3>
+          <p><strong>Funcionário:</strong> ${name}<br><strong>Período:</strong> ${title}</p>
+          <table style="font-size:.9rem;margin-top:1rem">
+            <thead><tr style="background:#f1f5f9"><th>Data</th><th>Horas</th><th>Extras</th></tr></thead>
+            <tbody>${dailyRows || '<tr><td colspan="3">Nenhum registro</td></tr>'}</tbody>
+          </table>
+          <p style="margin-top:1rem;font-size:1.1rem">
+            <strong>Total trabalhado:</strong> ${hours.worked}h<br>
+            <strong>Total extras:</strong> ${hours.extra}h
+          </p>
+          <button onclick="window.print()" class="btn primary" style="margin-top:1rem">Imprimir / PDF</button>
+        </div>
+      `;
+    }
+
+    $('btn-week').onclick = () => generateReport('week');
+    $('btn-month').onclick = () => generateReport('month');
+
+    $('bgenc').onclick = async () => {
+      const name = $('cemp').value;
+      const month = $('cmonth').value;
+      if (!name) return alert('Selecione um funcionário');
+      const puns = (await dbAll('pun')).filter(p => p.employee === name && p.timestamp.startsWith(month))
+        .sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+      // Agrupar por dia
+      const byDay = {};
+      puns.forEach(p => {
+        const day = p.timestamp.slice(0,10);
+        if (!byDay[day]) byDay[day] = [];
+        byDay[day].push(p);
+      });
+
+      let rows = '';
+      Object.keys(byDay).sort().forEach(day => {
+        const dayP = byDay[day];
+        const entrada = dayP.find(p => p.type === 'entrada');
+        const saida = dayP.find(p => p.type === 'saida');
+        const intIni = dayP.find(p => p.type === 'intervalo_inicio');
+        const intFim = dayP.find(p => p.type === 'intervalo_fim');
+        const fmt = p => p ? p.timestamp.slice(11,16) : '—';
+        const gps = entrada && entrada.lat ? `${entrada.lat.toFixed(5)}, ${entrada.lng.toFixed(5)}` : '—';
+        rows += `<tr>
+          <td>${day.split('-').reverse().join('/')}</td>
+          <td>${fmt(entrada)}</td>
+          <td>${fmt(intIni)}</td>
+          <td>${fmt(intFim)}</td>
+          <td>${fmt(saida)}</td>
+          <td style="font-size:.75rem">${gps}</td>
+        </tr>`;
+      });
+
+      const hours = calcHours(puns);
+      $('cprev').innerHTML = `
+        <h3 style="text-align:center">CARTÃO DE PONTO</h3>
+        <p><strong>Funcionário:</strong> ${name}<br>
+        <strong>Período:</strong> ${month}</p>
+        <table style="font-size:.85rem">
+          <thead>
+            <tr style="background:#f1f5f9">
+              <th>Data</th><th>Entrada</th><th>Int. Início</th><th>Int. Fim</th><th>Saída</th><th>GPS</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="6">Nenhum registro neste mês</td></tr>'}</tbody>
         </table>
-        <p style="font-size:.8rem;color:#666;margin-top:1rem">Valores aproximados para conferência.</p>
+        <p style="margin-top:1rem"><strong>Total horas:</strong> ${hours.worked}h &nbsp; | &nbsp; <strong>Extras:</strong> ${hours.extra}h</p>
+        <p style="font-size:.8rem;color:#666;margin-top:.5rem">Gerado pelo sistema Ponto Facial. Documento para conferência.</p>
         <button onclick="window.print()" class="btn primary" style="margin-top:1rem">Imprimir / Salvar PDF</button>
       `;
     };
