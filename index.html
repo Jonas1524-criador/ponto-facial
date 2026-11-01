@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <title>Ponto Facial</title>
+  <style>
+    :root { --primary:#0f172a; --accent:#3b82f6; --success:#10b981; --danger:#ef4444; --bg:#f1f5f9; --card:#fff; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:#0f172a;min-height:100vh}
+    header{background:var(--primary);color:#fff;padding:.8rem 1rem;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100}
+    .badge{background:#334155;padding:.2rem .6rem;border-radius:999px;font-size:.75rem}
+    .badge.ok{background:var(--success)}
+    nav{display:flex;overflow-x:auto;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:52px;z-index:90}
+    nav button{flex:0 0 auto;padding:.7rem 1rem;border:none;background:none;color:#64748b;font-size:.85rem}
+    nav button.active{color:var(--accent);border-bottom:2px solid var(--accent);font-weight:600}
+    main{padding:1rem;max-width:800px;margin:0 auto}
+    .screen{display:none}.screen.active{display:block}
+    .card{background:var(--card);border-radius:12px;padding:1.2rem;margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+    .card h2{margin-bottom:.8rem;font-size:1.2rem}
+    input,select{width:100%;padding:.75rem;margin:.4rem 0;border:1px solid #e2e8f0;border-radius:8px;font-size:1rem}
+    button.btn{width:100%;padding:.85rem;margin:.4rem 0;border:none;border-radius:8px;font-weight:600;cursor:pointer}
+    .btn.primary{background:var(--accent);color:#fff}
+    .btn.success{background:var(--success);color:#fff}
+    .btn:disabled{opacity:.5}
+    .video-box{position:relative;width:100%;max-width:480px;margin:1rem auto;background:#000;border-radius:12px;overflow:hidden}
+    video,canvas{width:100%;display:block}
+    canvas{position:absolute;top:0;left:0}
+    .result{margin-top:.8rem;padding:.75rem;background:#f8fafc;border-radius:8px}
+    .holerite{border:1px solid #e2e8f0;padding:1.2rem;margin-top:1rem}
+    .holerite table{width:100%;border-collapse:collapse;margin:1rem 0}
+    .holerite td{padding:.4rem;border-bottom:1px solid #eee}
+    @media print{header,nav,.btn{display:none!important}}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js"></script>
+</head>
+<body>
+  <header>
+    <div>⏱️ <strong>Ponto Facial</strong></div>
+    <span id="status" class="badge">Carregando...</span>
+  </header>
+  <div id="insecure-warning" style="display:none;background:#fef3c7;color:#92400e;padding:.75rem 1rem;text-align:center;font-size:.9rem">
+    ⚠️ Câmera bloqueada porque o arquivo foi aberto localmente.<br>
+    Para funcionar: hospede em Netlify Drop ou similar (HTTPS) e abra o link no celular.
+  </div>
+  <nav>
+    <button data-s="dash" class="active">Início</button>
+    <button data-s="punch">Bater Ponto</button>
+    <button data-s="reg">Cadastrar</button>
+    <button data-s="rec">Registros</button>
+    <button data-s="hol">Holerite</button>
+  </nav>
+  <main>
+    <section id="s-dash" class="screen active">
+      <div class="card">
+        <h2>Resumo</h2>
+        <div id="dash-content">Carregando...</div>
+      </div>
+    </section>
+
+    <section id="s-punch" class="screen">
+      <div class="card">
+        <h2>Bater Ponto</h2>
+        <select id="ptype">
+          <option value="entrada">Entrada</option>
+          <option value="saida">Saída</option>
+          <option value="intervalo_inicio">Início Intervalo</option>
+          <option value="intervalo_fim">Fim Intervalo</option>
+        </select>
+        <div class="video-box"><video id="pv" autoplay muted playsinline></video><canvas id="pc"></canvas></div>
+        <button id="bstartp" class="btn primary">Iniciar Câmera</button>
+        <button id="bcapp" class="btn success" disabled>Registrar</button>
+        <div id="pres" class="result"></div>
+      </div>
+    </section>
+
+    <section id="s-reg" class="screen">
+      <div class="card">
+        <h2>Cadastrar Funcionário</h2>
+        <input id="ename" placeholder="Nome completo">
+        <input id="emat" placeholder="Matrícula (opcional)">
+        <input id="esal" type="number" placeholder="Salário base (R$)" step="0.01">
+        <div class="video-box"><video id="rv" autoplay muted playsinline></video></div>
+        <button id="bstartr" class="btn primary">Iniciar Câmera</button>
+        <button id="bcapr" class="btn success" disabled>Capturar e Cadastrar</button>
+        <div id="rres" class="result"></div>
+      </div>
+    </section>
+
+    <section id="s-rec" class="screen">
+      <div class="card">
+        <h2>Registros</h2>
+        <button id="bexport" class="btn primary">Exportar CSV</button>
+        <div id="reclist"></div>
+      </div>
+    </section>
+
+    <section id="s-hol" class="screen">
+      <div class="card">
+        <h2>Holerite</h2>
+        <select id="hemp"></select>
+        <input id="hmonth" type="month">
+        <button id="bgenh" class="btn primary">Gerar Holerite</button>
+        <div id="hprev" class="holerite"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const MODEL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/';
+    let modelsOk = false, matcher = null, db;
+
+    const $ = id => document.getElementById(id);
+    const openDB = () => new Promise((res,rej) => {
+      const r = indexedDB.open('PontoCelular', 1);
+      r.onupgradeneeded = e => {
+        const d = e.target.result;
+        if (!d.objectStoreNames.contains('emp')) d.createObjectStore('emp', {keyPath:'id'});
+        if (!d.objectStoreNames.contains('pun')) d.createObjectStore('pun', {keyPath:'id'});
+      };
+      r.onsuccess = e => res(e.target.result);
+      r.onerror = () => rej(r.error);
+    });
+    const dbAll = store => new Promise((res,rej) => {
+      const tx = db.transaction(store,'readonly');
+      const rq = tx.objectStore(store).getAll();
+      rq.onsuccess = () => res(rq.result);
+      rq.onerror = () => rej(rq.error);
+    });
+    const dbPut = (store, item) => new Promise((res,rej) => {
+      const tx = db.transaction(store,'readwrite');
+      tx.objectStore(store).put(item);
+      tx.oncomplete = res;
+      tx.onerror = () => rej(tx.error);
+    });
+
+    document.querySelectorAll('nav button').forEach(b => {
+      b.onclick = () => {
+        document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+        document.querySelectorAll('.screen').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        $('s-' + b.dataset.s).classList.add('active');
+        if (b.dataset.s === 'dash') renderDash();
+        if (b.dataset.s === 'rec') renderRec();
+        if (b.dataset.s === 'hol') loadEmpSelect();
+      };
+    });
+
+    async function loadModels() {
+      try {
+        $('status').textContent = 'Carregando IA...';
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL);
+        await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL);
+        await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL);
+        modelsOk = true;
+        $('status').textContent = 'Pronto';
+        $('status').classList.add('ok');
+        await rebuild();
+      } catch(e) { $('status').textContent = 'Erro modelos'; }
+    }
+    async function rebuild() {
+      const emps = await dbAll('emp');
+      if (!emps.length) { matcher = null; return; }
+      matcher = new faceapi.FaceMatcher(emps.map(e => new faceapi.LabeledFaceDescriptors(e.name, [new Float32Array(e.descriptor)])), 0.55);
+    }
+    async function startCam(v, resultEl) {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Câmera não suportada neste navegador');
+        }
+        if (location.protocol === 'file:' || location.protocol === 'content:') {
+          throw new Error('Câmera bloqueada. Abra o arquivo via HTTPS (veja instruções abaixo)');
+        }
+        const constraints = {
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        };
+        const s = await navigator.mediaDevices.getUserMedia(constraints);
+        v.srcObject = s;
+        await v.play();
+        if (resultEl) resultEl.textContent = 'Câmera ativa. Posicione o rosto.';
+        return s;
+      } catch (err) {
+        let msg = 'Erro na câmera: ';
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          msg += 'Permissão negada. Vá nas configurações do navegador e permita a câmera.';
+        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          msg += 'Nenhuma câmera encontrada.';
+        } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+          msg += 'Câmera em uso por outro aplicativo.';
+        } else if (err.message.includes('HTTPS') || err.message.includes('bloqueada')) {
+          msg = err.message;
+        } else {
+          msg += err.message || err.name;
+        }
+        if (resultEl) resultEl.innerHTML = `<strong style="color:#ef4444">${msg}</strong>`;
+        throw err;
+      }
+    }
+    async function detect(v) {
+      const o = new faceapi.TinyFaceDetectorOptions({inputSize:224, scoreThreshold:0.5});
+      return await faceapi.detectSingleFace(v, o).withFaceLandmarks(true).withFaceDescriptor();
+    }
+    async function gps() {
+      return new Promise((res,rej) => navigator.geolocation.getCurrentPosition(
+        p => res({lat:p.coords.latitude, lng:p.coords.longitude, acc:Math.round(p.coords.accuracy)}),
+        rej, {enableHighAccuracy:true, timeout:10000}
+      ));
+    }
+
+    $('bstartr').onclick = async () => {
+      try {
+        await startCam($('rv'), $('rres'));
+        $('bcapr').disabled = false;
+      } catch (e) { /* erro já mostrado */ }
+    };
+    $('bcapr').onclick = async () => {
+      const name = $('ename').value.trim();
+      if (!name) return alert('Nome obrigatório');
+      const d = await detect($('rv'));
+      if (!d) return alert('Rosto não detectado');
+      const emp = {id:Date.now().toString(), name, mat:$('emat').value, sal:parseFloat($('esal').value)||0, descriptor:Array.from(d.descriptor)};
+      await dbPut('emp', emp);
+      await rebuild();
+      $('rres').innerHTML = '<strong style="color:#10b981">✅ Cadastrado!</strong>';
+    };
+
+    $('bstartp').onclick = async () => {
+      try {
+        await startCam($('pv'), $('pres'));
+        $('bcapp').disabled = false;
+      } catch (e) { /* erro já mostrado */ }
+    };
+    $('bcapp').onclick = async () => {
+      const res = $('pres');
+      res.textContent = 'Processando...';
+      const d = await detect($('pv'));
+      if (!d || !matcher) return res.textContent = 'Rosto não reconhecido ou sem funcionários.';
+      const m = matcher.findBestMatch(d.descriptor);
+      if (m.label === 'unknown') return res.innerHTML = '<strong style="color:#ef4444">Não reconhecido</strong>';
+      let g = {lat:null,lng:null,acc:null};
+      try { g = await gps(); } catch {}
+      const pun = {id:'p'+Date.now(), employee:m.label, type:$('ptype').value, timestamp:new Date().toISOString(), lat:g.lat, lng:g.lng, acc:g.acc};
+      await dbPut('pun', pun);
+      res.innerHTML = `<strong style="color:#10b981">✅ Registrado!</strong><br>${m.label} - ${pun.type}<br>${new Date().toLocaleString('pt-BR')}<br>GPS: ${g.lat?g.lat.toFixed(5)+', '+g.lng.toFixed(5):'indisponível'}`;
+    };
+
+    function calcHours(puns, jornada=8) {
+      const by = {};
+      puns.forEach(p => { const d = p.timestamp.slice(0,10); (by[d]||=[]).push(p); });
+      let tw=0, te=0; const jm = jornada*60;
+      Object.values(by).forEach(day => {
+        day.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
+        let w=0, cur=null;
+        day.forEach(p => {
+          const t = new Date(p.timestamp).getTime();
+          if (p.type==='entrada') cur=t;
+          else if (p.type==='intervalo_inicio' && cur) { w += t-cur; cur=null; }
+          else if (p.type==='intervalo_fim') cur=t;
+          else if (p.type==='saida' && cur) { w += t-cur; cur=null; }
+        });
+        const min = Math.round(w/60000);
+        tw += min; te += Math.max(0, min-jm);
+      });
+      return {worked:(tw/60).toFixed(1), extra:(te/60).toFixed(1)};
+    }
+
+    async function renderDash() {
+      const puns = await dbAll('pun');
+      const today = new Date().toISOString().slice(0,10);
+      const tp = puns.filter(p=>p.timestamp.startsWith(today));
+      const month = new Date().toISOString().slice(0,7);
+      const mp = puns.filter(p=>p.timestamp.startsWith(month));
+      const h = calcHours(mp);
+      $('dash-content').innerHTML = `
+        <p><strong>Hoje:</strong> ${tp.length ? tp.map(p=>`${p.employee} ${p.type} ${p.timestamp.slice(11,16)}`).join('<br>') : 'Nenhum ponto'}</p>
+        <p style="margin-top:.8rem"><strong>Mês:</strong> ${h.worked}h trabalhadas • ${h.extra}h extras</p>
+      `;
+    }
+    async function renderRec() {
+      const puns = (await dbAll('pun')).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+      $('reclist').innerHTML = puns.slice(0,40).map(p=>`
+        <div style="padding:.6rem 0;border-bottom:1px solid #eee">
+          <strong>${p.employee}</strong> — ${p.type}<br>
+          <small>${new Date(p.timestamp).toLocaleString('pt-BR')}</small>
+          ${p.lat?` <a href="https://maps.google.com/?q=${p.lat},${p.lng}" target="_blank">Mapa</a>`:''}
+        </div>`).join('') || '<p>Nenhum registro</p>';
+    }
+    $('bexport').onclick = async () => {
+      const puns = await dbAll('pun');
+      if (!puns.length) return alert('Nada para exportar');
+      const csv = 'Funcionario,Tipo,DataHora,Lat,Lng,Precisao\n' + puns.map(p=>`"${p.employee}","${p.type}","${p.timestamp}",${p.lat||''},${p.lng||''},${p.acc||''}`).join('\n');
+      const a = document.createElement('a');
+      a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+      a.download = 'ponto.csv'; a.click();
+    };
+    async function loadEmpSelect() {
+      const emps = await dbAll('emp');
+      $('hemp').innerHTML = emps.map(e=>`<option value="${e.name}">${e.name}</option>`).join('');
+      $('hmonth').value = new Date().toISOString().slice(0,7);
+    }
+    $('bgenh').onclick = async () => {
+      const name = $('hemp').value;
+      const month = $('hmonth').value;
+      const puns = (await dbAll('pun')).filter(p=>p.employee===name && p.timestamp.startsWith(month));
+      const emp = (await dbAll('emp')).find(e=>e.name===name) || {sal:3000};
+      const h = calcHours(puns);
+      const sal = emp.sal || 3000;
+      const hn = sal / 220;
+      const ve = parseFloat(h.extra) * hn * 1.5;
+      const bruto = sal + ve;
+      const inss = bruto * 0.09;
+      const liq = bruto - inss;
+      $('hprev').innerHTML = `
+        <h3 style="text-align:center">HOLERITE - ${month}</h3>
+        <p><strong>Funcionário:</strong> ${name}</p>
+        <table>
+          <tr><td>Salário Base</td><td style="text-align:right">R$ ${sal.toFixed(2)}</td></tr>
+          <tr><td>Horas Trabalhadas</td><td style="text-align:right">${h.worked}h</td></tr>
+          <tr><td>Horas Extras (50%)</td><td style="text-align:right">${h.extra}h = R$ ${ve.toFixed(2)}</td></tr>
+          <tr><td><strong>Total Proventos</strong></td><td style="text-align:right"><strong>R$ ${bruto.toFixed(2)}</strong></td></tr>
+          <tr><td>INSS (aprox.)</td><td style="text-align:right">- R$ ${inss.toFixed(2)}</td></tr>
+          <tr><td><strong>Líquido</strong></td><td style="text-align:right"><strong>R$ ${liq.toFixed(2)}</strong></td></tr>
+        </table>
+        <p style="font-size:.8rem;color:#666;margin-top:1rem">Valores aproximados para conferência.</p>
+        <button onclick="window.print()" class="btn primary" style="margin-top:1rem">Imprimir / Salvar PDF</button>
+      `;
+    };
+
+    (async () => {
+      db = await openDB();
+      if (location.protocol === 'file:' || location.protocol === 'content:' || !window.isSecureContext) {
+        document.getElementById('insecure-warning').style.display = 'block';
+      }
+      loadModels();
+      renderDash();
+    })();
+  </script>
+</body>
+</html>
