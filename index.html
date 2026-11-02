@@ -124,6 +124,7 @@
 
   <script>
     const MODEL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/';
+    const API = 'https://SEU-SERVIDOR.onrender.com'; // <-- TROQUE pela URL do seu servidor
     let modelsOk = false, matcher = null, db;
 
     const $ = id => document.getElementById(id);
@@ -133,6 +134,7 @@
         const d = e.target.result;
         if (!d.objectStoreNames.contains('emp')) d.createObjectStore('emp', {keyPath:'id'});
         if (!d.objectStoreNames.contains('pun')) d.createObjectStore('pun', {keyPath:'id'});
+        if (!d.objectStoreNames.contains('queue')) d.createObjectStore('queue', {keyPath:'id'});
       };
       r.onsuccess = e => res(e.target.result);
       r.onerror = () => rej(r.error);
@@ -150,6 +152,30 @@
       tx.onerror = () => rej(tx.error);
     });
 
+    async function api(path, options = {}) {
+      const res = await fetch(API + path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    async function syncQueue() {
+      if (!navigator.onLine) return;
+      const queue = await dbAll('queue').catch(() => []);
+      for (const item of queue) {
+        try {
+          if (item.type === 'punch') await api('/api/punches', { method: 'POST', body: JSON.stringify(item.data) });
+          if (item.type === 'employee') await api('/api/employees', { method: 'POST', body: JSON.stringify(item.data) });
+          // remove from queue
+          const tx = db.transaction('queue','readwrite');
+          tx.objectStore('queue').delete(item.id);
+          await new Promise(r => tx.oncomplete = r);
+        } catch (e) { console.warn('sync fail', e); }
+      }
+    }
+
     document.querySelectorAll('nav button').forEach(b => {
       b.onclick = () => {
         if (b.id === 'btn-admin') return;
@@ -165,7 +191,7 @@
     });
 
     let isAdmin = false;
-    const ADMIN_PASS = '151522nn'; // altere esta senha se quiser
+    const ADMIN_PASS = 'admin123'; // altere esta senha se quiser
 
     $('btn-admin').onclick = () => {
       if (isAdmin) {
@@ -200,9 +226,16 @@
       } catch(e) { $('status').textContent = 'Erro modelos'; }
     }
     async function rebuild() {
-      const emps = await dbAll('emp');
-      if (!emps.length) { matcher = null; return; }
-      matcher = new faceapi.FaceMatcher(emps.map(e => new faceapi.LabeledFaceDescriptors(e.name, [new Float32Array(e.descriptor)])), 0.55);
+      try {
+        const emps = await api('/api/employees');
+        if (!emps.length) { matcher = null; return; }
+        matcher = new faceapi.FaceMatcher(emps.map(e => new faceapi.LabeledFaceDescriptors(e.name, [new Float32Array(e.descriptor)])), 0.55);
+      } catch (e) {
+        // fallback local se offline
+        const emps = await dbAll('emp').catch(() => []);
+        if (!emps.length) { matcher = null; return; }
+        matcher = new faceapi.FaceMatcher(emps.map(e => new faceapi.LabeledFaceDescriptors(e.name, [new Float32Array(e.descriptor)])), 0.55);
+      }
     }
     async function startCam(v, resultEl) {
       try {
@@ -261,9 +294,14 @@
       const d = await detect($('rv'));
       if (!d) return alert('Rosto não detectado');
       const emp = {id:Date.now().toString(), name, mat:$('emat').value, sal:parseFloat($('esal').value)||0, descriptor:Array.from(d.descriptor)};
-      await dbPut('emp', emp);
+      try {
+        await api('/api/employees', { method: 'POST', body: JSON.stringify(emp) });
+        $('rres').innerHTML = '<strong style="color:#10b981">✅ Cadastrado no servidor!</strong>';
+      } catch (e) {
+        await dbPut('queue', { id: 'q' + Date.now(), type: 'employee', data: emp });
+        $('rres').innerHTML = '<strong style="color:#f59e0b">Salvo offline. Será enviado quando tiver internet.</strong>';
+      }
       await rebuild();
-      $('rres').innerHTML = '<strong style="color:#10b981">✅ Cadastrado!</strong>';
     };
 
     $('bstartp').onclick = async () => {
@@ -281,9 +319,14 @@
       if (m.label === 'unknown') return res.innerHTML = '<strong style="color:#ef4444">Não reconhecido</strong>';
       let g = {lat:null,lng:null,acc:null};
       try { g = await gps(); } catch {}
-      const pun = {id:'p'+Date.now(), employee:m.label, type:$('ptype').value, timestamp:new Date().toISOString(), lat:g.lat, lng:g.lng, acc:g.acc};
-      await dbPut('pun', pun);
-      res.innerHTML = `<strong style="color:#10b981">✅ Registrado!</strong><br>${m.label} - ${pun.type}<br>${new Date().toLocaleString('pt-BR')}<br>GPS: ${g.lat?g.lat.toFixed(5)+', '+g.lng.toFixed(5):'indisponível'}`;
+      const pun = {employee:m.label, type:$('ptype').value, timestamp:new Date().toISOString(), lat:g.lat, lng:g.lng, acc:g.acc};
+      try {
+        await api('/api/punches', { method: 'POST', body: JSON.stringify(pun) });
+        res.innerHTML = `<strong style="color:#10b981">✅ Registrado no servidor!</strong><br>${m.label} - ${pun.type}<br>${new Date().toLocaleString('pt-BR')}<br>GPS: ${g.lat?g.lat.toFixed(5)+', '+g.lng.toFixed(5):'indisponível'}`;
+      } catch (e) {
+        await dbPut('queue', { id: 'q' + Date.now(), type: 'punch', data: pun });
+        res.innerHTML = `<strong style="color:#f59e0b">Salvo offline.</strong><br>Será enviado quando voltar a internet.<br>${m.label} - ${pun.type}`;
+      }
     };
 
     function calcHours(puns, jornada=8) {
@@ -347,13 +390,17 @@
       a.click();
     };
     async function loadEmpSelectCartao() {
-      const emps = await dbAll('emp');
-      $('cemp').innerHTML = emps.map(e=>`<option value="${e.name}">${e.name}</option>`).join('');
+      try {
+        const emps = await api('/api/employees');
+        $('cemp').innerHTML = emps.map(e=>`<option value="${e.name}">${e.name}</option>`).join('');
+      } catch { $('cemp').innerHTML = '<option>Erro ao carregar</option>'; }
       $('cmonth').value = new Date().toISOString().slice(0,7);
     }
     async function loadEmpSelectRelatorio() {
-      const emps = await dbAll('emp');
-      $('remp').innerHTML = emps.map(e=>`<option value="${e.name}">${e.name}</option>`).join('');
+      try {
+        const emps = await api('/api/employees');
+        $('remp').innerHTML = emps.map(e=>`<option value="${e.name}">${e.name}</option>`).join('');
+      } catch { $('remp').innerHTML = '<option>Erro ao carregar</option>'; }
     }
 
     function getWeekRange() {
@@ -377,8 +424,16 @@
     async function generateReport(type) {
       const name = $('remp').value;
       if (!name) return alert('Selecione um funcionário');
-      const allPuns = await dbAll('pun');
-      let filtered = allPuns.filter(p => p.employee === name);
+      let filtered = [];
+      try {
+        if (type === 'week') {
+          const { start, end } = getWeekRange();
+          filtered = await api(`/api/punches?employee=${encodeURIComponent(name)}&from=${start.toISOString()}&to=${end.toISOString()}`);
+        } else {
+          const month = new Date().toISOString().slice(0,7);
+          filtered = await api(`/api/punches?employee=${encodeURIComponent(name)}&month=${month}`);
+        }
+      } catch { return alert('Erro ao buscar dados'); }
 
       let title = '';
       if (type === 'week') {
@@ -435,8 +490,11 @@
       const name = $('cemp').value;
       const month = $('cmonth').value;
       if (!name) return alert('Selecione um funcionário');
-      const puns = (await dbAll('pun')).filter(p => p.employee === name && p.timestamp.startsWith(month))
-        .sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+      let puns = [];
+      try {
+        puns = await api(`/api/punches?employee=${encodeURIComponent(name)}&month=${month}`);
+      } catch { return alert('Erro ao buscar dados do servidor'); }
+      puns.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
 
       // Agrupar por dia
       const byDay = {};
@@ -489,8 +547,10 @@
       if (location.protocol === 'file:' || location.protocol === 'content:' || !window.isSecureContext) {
         document.getElementById('insecure-warning').style.display = 'block';
       }
+      window.addEventListener('online', syncQueue);
       loadModels();
       renderDash();
+      syncQueue();
     })();
   </script>
 </body>
